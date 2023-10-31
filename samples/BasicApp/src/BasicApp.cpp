@@ -123,7 +123,9 @@ namespace PhysicsEngine {
 	}
 
 	void BallEngine::CheckCollision(BallStruct* ball1, int index) {
-		for (int i = index + 1; i < balls.size(); i++) {
+		for (int i = 0; i < balls.size(); i++) {
+			if (i == index) continue;
+			
 			float distance = glm::distance(ball1->position, balls[i]->position);
 			if (distance <= ball1->radius + balls[i]->radius) {
 
@@ -281,6 +283,9 @@ void BasicApp::draw() {
 
 	{
 		if (gui::Begin("Settings")) {
+			if (gui::Button("Add Ball")) {
+				engine->AddBall();
+			}
 			for (PhysicsEngine::BallStruct* ball : engine->balls) {
 				gui::PushID(ball);
 				gui::DragFloat2("Position", &ball->position);
@@ -302,9 +307,6 @@ void BasicApp::draw() {
 			gui::TextDisabled("Ground Friction");
 			gui::DragFloat("Coefficient", &engine->groundFrictionCoefficient);
 			gui::PopID();
-			if (gui::Button("Add Ball")) {
-				engine->AddBall();
-			}
 			gui::End();
 		}
 	}
