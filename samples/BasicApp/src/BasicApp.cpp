@@ -2,21 +2,27 @@
 #include "cinder/app/RendererGl.h"
 #include "cinder/gl/gl.h"
 #include "cinder/CinderImGui.h"
+#include "cinder/Rand.h"
+#include <iostream>
 
 using namespace ci;
 using namespace ci::app;
 namespace gui = ImGui;
 
-#define BALL_RADIUS 32.f // 16 pixels
+
 #define VELO_DAMPIN 0.45f // 16 pixels
+
+
 
 namespace PhysicsEngine {
 
 	struct BallStruct {
-		BallStruct(glm::vec2 pos) : position(pos), isDragging(false) {}
-        bool isDragging;
+		BallStruct(glm::vec2 pos, float rad, ci::Color col) : position(pos), radius(rad), color(col), isDragging(false) {}
 		glm::vec2 position;
 		glm::vec2 velocity;
+		float radius;
+		ci::Color color;
+		bool isDragging;
 	};
 	struct BallForce {
 		BallForce(const char* label, glm::vec2 force) : name(label), velocity(force) {}
@@ -30,23 +36,29 @@ namespace PhysicsEngine {
 
 	class BallEngine {
 	public:
-		const std::vector<ci::Color> colors = {
-			ci::Color(1.f, 0.f, 0.f), ci::Color(0.f, 1.f, 0.f)
-		};
 		std::vector<BallStruct*> balls;
 		std::vector<BallForce*> forces;
 		EngineSettings settings;
+		float airFrictionCoefficient;
+		float groundFrictionCoefficient;
+		Rand* randPtr;
 	public:
 		BallEngine(glm::ivec2 bounds);
 		~BallEngine();
 		void Update();
 		void Draw();
+		void AddBall();
+	private:
+		void CheckBoundingBox(BallStruct* ball);
+		void ApplyForces(BallStruct* ball);
+		void CheckCollision(BallStruct* ball, int index);
 	};
 
 	BallEngine::BallEngine(glm::ivec2 bounds) {
+		randPtr = new Rand();
+		airFrictionCoefficient = .02f;
+		groundFrictionCoefficient = .1f;
 		settings.bounds = bounds;
-		balls.push_back(new BallStruct(glm::vec2((float)settings.bounds.x * .25f, settings.bounds.y * .5f)));
-		balls.push_back(new BallStruct(glm::vec2((float)settings.bounds.x * .75f, settings.bounds.y * .5f)));
 		forces.push_back(new BallForce("Gravity", glm::vec2(0.f, .5f)));
 		forces.push_back(new BallForce("Wind", glm::vec2(0.f, 0.f)));
 	}
@@ -62,46 +74,109 @@ namespace PhysicsEngine {
 		}
 	}
 
-	void BallEngine::Update() {
-		for (BallStruct* ball : balls) {
-            if (!ball->isDragging) {
-                for(BallForce* force : forces) {
-                    ball->velocity += force->velocity;
-                }
-            }
-            
-			ball->position += ball->velocity;
-			if (ball->position.y >= settings.bounds.y - BALL_RADIUS * .5f) {
-				if (ball->velocity.y > 0.f) {
-					ball->velocity.y *= -VELO_DAMPIN;
-					ball->position.y = settings.bounds.y - BALL_RADIUS * .5f;
-				}
+	void BallEngine::AddBall() {
+		float radius = randPtr->nextFloat(16.f, 64.f);
+		ci::Color color = ci::Color(randPtr->nextFloat(), randPtr->nextFloat(), randPtr->nextFloat());
+		glm::vec2 position = glm::vec2(randPtr->nextFloat(radius, (float)settings.bounds.x - radius), randPtr->nextFloat(radius, (float)settings.bounds.y - radius));
+		balls.push_back(new BallStruct(position, radius, color));
+	}
+
+
+	void BallEngine::CheckBoundingBox(BallStruct* ball) {
+		if (ball->position.y >= settings.bounds.y - ball->radius * .5f) {
+			if (ball->velocity.y > 0.f) {
+				ball->velocity.y *= -VELO_DAMPIN;
 			}
-			if (ball->position.y <= BALL_RADIUS * .5f) {
-				if (ball->velocity.y < 0.f) {
-					ball->velocity.y = 0.f;
-					ball->position.y = BALL_RADIUS * .5f;
-				}
+			ball->position.y = settings.bounds.y - ball->radius * .5f;
+		}
+		if (ball->position.y <= ball->radius * .5f) {
+			if (ball->velocity.y < 0.f) {
+				ball->velocity.y = 0.f;
 			}
-			if (ball->position.x <= BALL_RADIUS * .5f) {
-				if (ball->velocity.x < 0.f) {
-					ball->velocity.x *= -VELO_DAMPIN * VELO_DAMPIN;
-					ball->position.x = BALL_RADIUS * .5f;
-				}
+			ball->position.y = ball->radius * .5f;
+		}
+		if (ball->position.x <= ball->radius * .5f) {
+			if (ball->velocity.x < 0.f) {
+				ball->velocity.x *= -VELO_DAMPIN * VELO_DAMPIN;
 			}
-			if (ball->position.x >= settings.bounds.x - BALL_RADIUS * .5f) {
-				if (ball->velocity.x > 0.f) {
-					ball->velocity.x *= -VELO_DAMPIN * VELO_DAMPIN;
-					ball->position.x = settings.bounds.x - BALL_RADIUS * .5f;
-				}
+			ball->position.x = ball->radius * .5f;
+		}
+		if (ball->position.x >= settings.bounds.x - ball->radius * .5f) {
+			if (ball->velocity.x > 0.f) {
+				ball->velocity.x *= -VELO_DAMPIN * VELO_DAMPIN;
+			}
+			ball->position.x = settings.bounds.x - ball->radius * .5f;
+		}
+	}
+
+	void BallEngine::ApplyForces(BallStruct* ball) {
+		if (ball->isDragging)
+			return;
+
+		for (BallForce* force : forces) {
+			ball->velocity += force->velocity;
+		}
+
+		glm::vec2 airFriction = -airFrictionCoefficient * ball->velocity;
+		ball->velocity += airFriction;
+
+	}
+
+	void BallEngine::CheckCollision(BallStruct* ball1, int index) {
+		for (int i = index + 1; i < balls.size(); i++) {
+			float distance = glm::distance(ball1->position, balls[i]->position);
+			if (distance <= ball1->radius + balls[i]->radius) {
+
+				// Resolve overlapping
+
+				BallStruct* ball2 = balls[i];
+				glm::vec2 distanceVec = ball1->position - ball2->position;
+				glm::vec2 push = distanceVec * ((ball1->radius + ball2->radius) - distance) / distance;
+				ball1->position += push * 0.5f;
+				ball2->position -= push * 0.5f;
+
+				if (ball1->isDragging || ball2->isDragging)
+					continue;
+
+				// Elastic collision
+
+				glm::vec2 collisionNormal = glm::normalize(distanceVec);
+				glm::vec2 collisionTangent = glm::vec2(-collisionNormal.y, collisionNormal.x);
+
+				float v1n = glm::dot(collisionNormal, ball1->velocity);
+				float v1t = glm::dot(collisionTangent, ball1->velocity);
+				float v2n = glm::dot(collisionNormal, ball2->velocity);
+				float v2t = glm::dot(collisionTangent, ball2->velocity);
+					
+				float mass1 = ball1->radius * ball1->radius;
+				float mass2 = ball2->radius * ball2->radius;
+
+				float u1n = (mass1 - mass2) / (mass1 + mass2) * v1n + (2 * mass2) / (mass1 + mass2) * v2n;
+				float u2n = (2 * mass1) / (mass1 + mass2) * v1n + (mass2 - mass1) / (mass1 + mass2) * v2n;
+
+				ball1->velocity = collisionNormal * u1n + collisionTangent * v1t;
+				ball2->velocity = collisionNormal * u2n + collisionTangent * v2t;
+
 			}
 		}
 	}
-	void BallEngine::Draw() {
+
+	void BallEngine::Update() {
 		int index = 0;
 		for (BallStruct* ball : balls) {
-			ci::gl::ScopedColor color(colors[index++]);
-			gl::drawSolidCircle(ball->position, BALL_RADIUS);
+
+			CheckBoundingBox(ball);
+			ApplyForces(ball);
+			CheckCollision(ball, index);
+			index++;
+			ball->position += ball->velocity;
+	
+		}
+	}
+	void BallEngine::Draw() {
+		for (BallStruct* ball : balls) {
+			ci::gl::ScopedColor color(ball->color);
+			gl::drawSolidCircle(ball->position, ball->radius);
 		}
 	}
 
@@ -142,17 +217,17 @@ void prepareSettings( BasicApp::Settings* settings ) {
 
 void BasicApp::mouseDown(MouseEvent event) {
 	for (PhysicsEngine::BallStruct* ball : engine->balls) {
-		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < BALL_RADIUS && !ball->isDragging) {
-            ball->velocity = (glm::vec2)event.getPos() - (ball->position);
+		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius && !ball->isDragging) {
+            // ball->velocity = (glm::vec2)event.getPos() - (ball->position);
 		}
 	}
 }
 
 void BasicApp::mouseDrag( MouseEvent event ) {
     for (PhysicsEngine::BallStruct* ball : engine->balls) {
-        if (glm::distance(ball->position, (glm::vec2)event.getPos()) < BALL_RADIUS) {
+        if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius) {
             ball->isDragging = true;
-            ball->velocity = (glm::vec2)event.getPos() - (ball->position);
+			ball->velocity = glm::vec2(.0f, .0f);
             ball->position = (glm::vec2)event.getPos();
         }
     }
@@ -160,6 +235,9 @@ void BasicApp::mouseDrag( MouseEvent event ) {
 
 void BasicApp::mouseUp( MouseEvent event ) {
     for (PhysicsEngine::BallStruct* ball : engine->balls) {
+		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius && !ball->isDragging) {
+			ball->velocity = ((glm::vec2)event.getPos() - (ball->position)) * 16.f / ball->radius;
+		}
         ball->isDragging = false;
     }
 }
@@ -193,6 +271,7 @@ void BasicApp::update() {
 	engine->Update();
 }
 
+
 void BasicApp::draw() {
 
 	// Clear the contents of the window. This call will clear
@@ -214,6 +293,17 @@ void BasicApp::draw() {
 				gui::TextDisabled(force->name.c_str());
 				gui::DragFloat2("Force", &force->velocity);
 				gui::PopID();
+			}
+			gui::PushID(1);
+			gui::TextDisabled("Air Friction");
+			gui::DragFloat("Coefficient", &engine->airFrictionCoefficient);
+			gui::PopID();
+			gui::PushID(2);
+			gui::TextDisabled("Ground Friction");
+			gui::DragFloat("Coefficient", &engine->groundFrictionCoefficient);
+			gui::PopID();
+			if (gui::Button("Add Ball")) {
+				engine->AddBall();
 			}
 			gui::End();
 		}
