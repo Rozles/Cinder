@@ -3,14 +3,10 @@
 #include "cinder/gl/gl.h"
 #include "cinder/CinderImGui.h"
 #include "cinder/Rand.h"
-#include <iostream>
 
 using namespace ci;
 using namespace ci::app;
 namespace gui = ImGui;
-
-
-#define VELO_DAMPIN 0.45f // 16 pixels
 
 
 
@@ -20,6 +16,7 @@ namespace PhysicsEngine {
 		BallStruct(glm::vec2 pos, float rad, ci::Color col) : position(pos), radius(rad), color(col), isDragging(false) {}
 		glm::vec2 position;
 		glm::vec2 velocity;
+		glm::vec2 grabbingVec;
 		float radius;
 		ci::Color color;
 		bool isDragging;
@@ -39,9 +36,12 @@ namespace PhysicsEngine {
 		std::vector<BallStruct*> balls;
 		std::vector<BallForce*> forces;
 		EngineSettings settings;
-		float airFrictionCoefficient;
+		float airDragCoefficient;
 		float groundFrictionCoefficient;
+		float minBallRadius;
+		float maxBallRadius;
 		Rand* randPtr;
+
 	public:
 		BallEngine(glm::ivec2 bounds);
 		~BallEngine();
@@ -56,8 +56,10 @@ namespace PhysicsEngine {
 
 	BallEngine::BallEngine(glm::ivec2 bounds) {
 		randPtr = new Rand();
-		airFrictionCoefficient = .02f;
-		groundFrictionCoefficient = .1f;
+		airDragCoefficient = .02f;
+		groundFrictionCoefficient = .15f;
+		minBallRadius = 8.f;
+		maxBallRadius = 48.f;
 		settings.bounds = bounds;
 		forces.push_back(new BallForce("Gravity", glm::vec2(0.f, .5f)));
 		forces.push_back(new BallForce("Wind", glm::vec2(0.f, 0.f)));
@@ -75,7 +77,7 @@ namespace PhysicsEngine {
 	}
 
 	void BallEngine::AddBall() {
-		float radius = randPtr->nextFloat(16.f, 64.f);
+		float radius = randPtr->nextFloat(minBallRadius, maxBallRadius);
 		ci::Color color = ci::Color(randPtr->nextFloat(), randPtr->nextFloat(), randPtr->nextFloat());
 		glm::vec2 position = glm::vec2(randPtr->nextFloat(radius, (float)settings.bounds.x - radius), randPtr->nextFloat(radius, (float)settings.bounds.y - radius));
 		balls.push_back(new BallStruct(position, radius, color));
@@ -83,48 +85,45 @@ namespace PhysicsEngine {
 
 
 	void BallEngine::CheckBoundingBox(BallStruct* ball) {
+		/*                       
+		 *               |              |         Cf
+		 *  F = Cf' * N  |  N = v * m   | Cf' = ------
+		 *               |              |       avg(m)              
+		 */
+		glm::vec2 groundFriction = -(groundFrictionCoefficient / (((minBallRadius + maxBallRadius) / 2) * ((minBallRadius + maxBallRadius) / 2))) * ball->velocity * (ball->radius * ball->radius);
+
 		if (ball->position.y >= settings.bounds.y - ball->radius * .5f) {
-			if (ball->velocity.y > 0.f) {
-				ball->velocity.y *= -VELO_DAMPIN;
-			}
+			if (ball->velocity.y > 0.f)
+				ball->velocity.y = -(ball->velocity.y + groundFriction.y);	
+			ball->velocity.x += groundFriction.x;
 			ball->position.y = settings.bounds.y - ball->radius * .5f;
 		}
+
 		if (ball->position.y <= ball->radius * .5f) {
-			if (ball->velocity.y < 0.f) {
-				ball->velocity.y = 0.f;
-			}
+			if (ball->velocity.y < 0.f) 
+				ball->velocity.y = -(ball->velocity.y + groundFriction.y);	
+			ball->velocity.x += groundFriction.x;
 			ball->position.y = ball->radius * .5f;
 		}
+
 		if (ball->position.x <= ball->radius * .5f) {
-			if (ball->velocity.x < 0.f) {
-				ball->velocity.x *= -VELO_DAMPIN * VELO_DAMPIN;
-			}
+			if (ball->velocity.x < 0.f) 
+				ball->velocity.x = -(ball->velocity.x + groundFriction.x);
+			ball->velocity.y += groundFriction.y;
 			ball->position.x = ball->radius * .5f;
 		}
+
 		if (ball->position.x >= settings.bounds.x - ball->radius * .5f) {
-			if (ball->velocity.x > 0.f) {
-				ball->velocity.x *= -VELO_DAMPIN * VELO_DAMPIN;
-			}
+			if (ball->velocity.x > 0.f) 
+				ball->velocity.x = -(ball->velocity.x + groundFriction.x);
+			ball->velocity.y += groundFriction.y;
 			ball->position.x = settings.bounds.x - ball->radius * .5f;
 		}
 	}
 
-	void BallEngine::ApplyForces(BallStruct* ball) {
-		if (ball->isDragging)
-			return;
-
-		for (BallForce* force : forces) {
-			ball->velocity += force->velocity;
-		}
-
-		glm::vec2 airFriction = -airFrictionCoefficient * ball->velocity;
-		ball->velocity += airFriction;
-
-	}
-
 	void BallEngine::CheckCollision(BallStruct* ball1, int index) {
-		for (int i = 0; i < balls.size(); i++) {
-			if (i == index) continue;
+		for (int i = index + 1; i < balls.size(); i++) {
+			// if (i == index) continue;
 			
 			float distance = glm::distance(ball1->position, balls[i]->position);
 			if (distance <= ball1->radius + balls[i]->radius) {
@@ -132,10 +131,10 @@ namespace PhysicsEngine {
 				// Resolve overlapping
 
 				BallStruct* ball2 = balls[i];
-				glm::vec2 distanceVec = ball1->position - ball2->position;
+				glm::vec2 distanceVec = ball2->position - ball1->position;
 				glm::vec2 push = distanceVec * ((ball1->radius + ball2->radius) - distance) / distance;
-				ball1->position += push * 0.5f;
-				ball2->position -= push * 0.5f;
+				ball1->position -= push * 0.5f;
+				ball2->position += push * 0.5f;
 
 				if (ball1->isDragging || ball2->isDragging)
 					continue;
@@ -163,16 +162,33 @@ namespace PhysicsEngine {
 		}
 	}
 
+	void BallEngine::ApplyForces(BallStruct* ball) {
+		if (ball->isDragging)
+			return;
+
+		for (BallForce* force : forces) {
+			ball->velocity += force->velocity;
+		}
+
+		/*
+		 *                     |         |         Cd
+		 *  F = v^2 * Cd' * S  |  S ~ r  |  Cd' = -----  * 10^-3
+		 *                     |         |        avg(S)
+		 */
+		glm::vec2 vSquare = glm::vec2(ball->velocity.x * ball->velocity.x, ball->velocity.y * ball->velocity.y);
+		glm::vec2 airDrag = -vSquare * (airDragCoefficient * .01f / ((minBallRadius + maxBallRadius) / 2)) * ball->radius;
+		ball->velocity += airDrag;
+
+		ball->position += ball->velocity;
+
+	}
+
 	void BallEngine::Update() {
 		int index = 0;
 		for (BallStruct* ball : balls) {
-
 			CheckBoundingBox(ball);
+			CheckCollision(ball, index++);
 			ApplyForces(ball);
-			CheckCollision(ball, index);
-			index++;
-			ball->position += ball->velocity;
-	
 		}
 	}
 	void BallEngine::Draw() {
@@ -219,8 +235,10 @@ void prepareSettings( BasicApp::Settings* settings ) {
 
 void BasicApp::mouseDown(MouseEvent event) {
 	for (PhysicsEngine::BallStruct* ball : engine->balls) {
-		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius && !ball->isDragging) {
-            // ball->velocity = (glm::vec2)event.getPos() - (ball->position);
+		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius) {
+			ball->grabbingVec = (glm::vec2)event.getPos() - ball->position;
+			ball->velocity = glm::vec2(.0f, .0f);
+			break;
 		}
 	}
 }
@@ -229,8 +247,8 @@ void BasicApp::mouseDrag( MouseEvent event ) {
     for (PhysicsEngine::BallStruct* ball : engine->balls) {
         if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius) {
             ball->isDragging = true;
-			ball->velocity = glm::vec2(.0f, .0f);
-            ball->position = (glm::vec2)event.getPos();
+            ball->position = (glm::vec2)event.getPos() - ball->grabbingVec;
+			break;
         }
     }
 }
@@ -238,7 +256,7 @@ void BasicApp::mouseDrag( MouseEvent event ) {
 void BasicApp::mouseUp( MouseEvent event ) {
     for (PhysicsEngine::BallStruct* ball : engine->balls) {
 		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius && !ball->isDragging) {
-			ball->velocity = ((glm::vec2)event.getPos() - (ball->position)) * 16.f / ball->radius;
+			ball->velocity = ((glm::vec2)event.getPos() - (ball->position)) * ((engine->maxBallRadius + engine->minBallRadius) * .5f / ball->radius);
 		}
         ball->isDragging = false;
     }
@@ -300,8 +318,8 @@ void BasicApp::draw() {
 				gui::PopID();
 			}
 			gui::PushID(1);
-			gui::TextDisabled("Air Friction");
-			gui::DragFloat("Coefficient", &engine->airFrictionCoefficient);
+			gui::TextDisabled("Air Drag");
+			gui::DragFloat("Coefficient", &engine->airDragCoefficient);
 			gui::PopID();
 			gui::PushID(2);
 			gui::TextDisabled("Ground Friction");
