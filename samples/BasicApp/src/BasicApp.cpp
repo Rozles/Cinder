@@ -13,13 +13,11 @@ namespace gui = ImGui;
 namespace PhysicsEngine {
 
 	struct BallStruct {
-		BallStruct(glm::vec2 pos, float rad, ci::Color col) : position(pos), radius(rad), color(col), isDragging(false) {}
+		BallStruct(glm::vec2 pos, float rad, ci::Color col) : position(pos), radius(rad), color(col) {}
 		glm::vec2 position;
 		glm::vec2 velocity;
-		glm::vec2 grabbingVec;
 		float radius;
 		ci::Color color;
-		bool isDragging;
 	};
 	struct BallForce {
 		BallForce(const char* label, glm::vec2 force) : name(label), velocity(force) {}
@@ -30,12 +28,19 @@ namespace PhysicsEngine {
 		void Set(glm::ivec2 size) { bounds = size; }
 		glm::ivec2 bounds;
 	};
+	struct MousePointerStruct {
+		MousePointerStruct() : ball(nullptr), dragging(false) {}
+		BallStruct* ball;
+		bool dragging;
+		glm::vec2 grabbingVec;
+	};
 
 	class BallEngine {
 	public:
 		std::vector<BallStruct*> balls;
 		std::vector<BallForce*> forces;
 		EngineSettings settings;
+		MousePointerStruct* mousePointer;
 		float airDragCoefficient;
 		float groundFrictionCoefficient;
 		float minBallRadius;
@@ -61,6 +66,7 @@ namespace PhysicsEngine {
 		minBallRadius = 8.f;
 		maxBallRadius = 48.f;
 		settings.bounds = bounds;
+		mousePointer = new MousePointerStruct();
 		forces.push_back(new BallForce("Gravity", glm::vec2(0.f, .5f)));
 		forces.push_back(new BallForce("Wind", glm::vec2(0.f, 0.f)));
 	}
@@ -85,9 +91,9 @@ namespace PhysicsEngine {
 
 
 	void BallEngine::CheckBoundingBox(BallStruct* ball) {
-		/*                       
+		/*  Ground friction equation                    
 		 *               |              |         Cf
-		 *  F = Cf' * N  |  N = v * m   | Cf' = ------
+		 *  F = Cf' * N  |  N ~ v * m   | Cf' = ------
 		 *               |              |       avg(m)              
 		 */
 		glm::vec2 groundFriction = -(groundFrictionCoefficient / (((minBallRadius + maxBallRadius) / 2) * ((minBallRadius + maxBallRadius) / 2))) * ball->velocity * (ball->radius * ball->radius);
@@ -136,7 +142,7 @@ namespace PhysicsEngine {
 				ball1->position -= push * 0.5f;
 				ball2->position += push * 0.5f;
 
-				if (ball1->isDragging || ball2->isDragging)
+				if (ball1 == mousePointer->ball || ball2 == mousePointer->ball)
 					continue;
 
 				// Elastic collision
@@ -163,14 +169,14 @@ namespace PhysicsEngine {
 	}
 
 	void BallEngine::ApplyForces(BallStruct* ball) {
-		if (ball->isDragging)
+		if (ball == mousePointer->ball) 
 			return;
 
 		for (BallForce* force : forces) {
 			ball->velocity += force->velocity;
 		}
 
-		/*
+		/*  Air Drag equation
 		 *                     |         |         Cd
 		 *  F = v^2 * Cd' * S  |  S ~ r  |  Cd' = -----  * 10^-3
 		 *                     |         |        avg(S)
@@ -236,7 +242,8 @@ void prepareSettings( BasicApp::Settings* settings ) {
 void BasicApp::mouseDown(MouseEvent event) {
 	for (PhysicsEngine::BallStruct* ball : engine->balls) {
 		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius) {
-			ball->grabbingVec = (glm::vec2)event.getPos() - ball->position;
+			engine->mousePointer->ball = ball;
+			engine->mousePointer->grabbingVec = (glm::vec2)event.getPos() - ball->position;
 			ball->velocity = glm::vec2(.0f, .0f);
 			break;
 		}
@@ -244,22 +251,26 @@ void BasicApp::mouseDown(MouseEvent event) {
 }
 
 void BasicApp::mouseDrag( MouseEvent event ) {
-    for (PhysicsEngine::BallStruct* ball : engine->balls) {
-        if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius) {
-            ball->isDragging = true;
-            ball->position = (glm::vec2)event.getPos() - ball->grabbingVec;
-			break;
-        }
-    }
+	PhysicsEngine::BallStruct* ball = engine->mousePointer->ball;
+	
+	if (ball == nullptr) return;
+
+    ball->position = (glm::vec2)event.getPos() - engine->mousePointer->grabbingVec;
+	engine->mousePointer->dragging = true;
+    
 }
 
 void BasicApp::mouseUp( MouseEvent event ) {
-    for (PhysicsEngine::BallStruct* ball : engine->balls) {
-		if (glm::distance(ball->position, (glm::vec2)event.getPos()) < ball->radius && !ball->isDragging) {
-			ball->velocity = ((glm::vec2)event.getPos() - (ball->position)) * ((engine->maxBallRadius + engine->minBallRadius) * .5f / ball->radius);
-		}
-        ball->isDragging = false;
-    }
+	PhysicsEngine::BallStruct* ball = engine->mousePointer->ball;
+
+	if (ball == nullptr) return;
+
+	if (!engine->mousePointer->dragging)
+		ball->velocity = ((glm::vec2)event.getPos() - (ball->position)) * ((engine->maxBallRadius + engine->minBallRadius) * .5f / ball->radius);
+
+	engine->mousePointer->ball = nullptr;
+	engine->mousePointer->dragging = false;
+	
 }
 
 void BasicApp::keyDown( KeyEvent event )
