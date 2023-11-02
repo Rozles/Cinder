@@ -97,6 +97,8 @@ namespace PhysicsEngine {
 		 *               |              |       avg(m)              
 		 */
 		glm::vec2 groundFriction = -(groundFrictionCoefficient / (((minBallRadius + maxBallRadius) / 2) * ((minBallRadius + maxBallRadius) / 2))) * ball->velocity * (ball->radius * ball->radius);
+		if ((glm::length(ball->velocity) - glm::length(groundFriction)) < 0.f)
+			groundFriction = -ball->velocity;
 
 		if (ball->position.y >= settings.bounds.y - ball->radius * .5f) {
 			if (ball->velocity.y > 0.f)
@@ -181,8 +183,10 @@ namespace PhysicsEngine {
 		 *  F = v^2 * Cd' * S  |  S ~ r  |  Cd' = -----  * 10^-3
 		 *                     |         |        avg(S)
 		 */
-		glm::vec2 vSquare = glm::vec2(ball->velocity.x * ball->velocity.x, ball->velocity.y * ball->velocity.y);
+		glm::vec2 vSquare = glm::vec2(ball->velocity.x * std::abs(ball->velocity.x), ball->velocity.y * std::abs(ball->velocity.y));
 		glm::vec2 airDrag = -vSquare * (airDragCoefficient * .01f / ((minBallRadius + maxBallRadius) / 2)) * ball->radius;
+		if ((glm::length(ball->velocity) - glm::length(airDrag)) < 0)
+			airDrag = -ball->velocity;
 		ball->velocity += airDrag;
 
 		ball->position += ball->velocity;
